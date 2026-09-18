@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FTP Client — File Transfer Console</title>
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&display=swap" rel="stylesheet" />
+  <style>
+    /* ── Reset & Variables ─────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0a0e14;
+      --surface:   #0f1520;
+      --border:    #1c2d45;
+      --accent:    #00c8ff;
+      --accent2:   #00ffaa;
+      --danger:    #ff4060;
+      --warning:   #ffbb00;
+      --text:      #c8d8e8;
+      --text-dim:  #4a6080;
+      --text-bright: #eaf4ff;
+      --glow:      0 0 12px rgba(0,200,255,0.35);
+      --glow2:     0 0 12px rgba(0,255,170,0.35);
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 14px;
+      overflow: hidden;
+    }
+
+    /* ── Scanline overlay ──────────────────────────────── */
+    body::before {
+      content: '';
+      position: fixed; inset: 0;
+      background: repeating-linear-gradient(
+        to bottom,
+        transparent 0px, transparent 3px,
+        rgba(0,0,0,0.08) 3px, rgba(0,0,0,0.08) 4px
+      );
+      pointer-events: none;
+      z-index: 9999;
+    }
+
+    /* ── Layout ────────────────────────────────────────── */
+    .app {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      grid-template-columns: 280px 1fr;
+      grid-template-areas:
+        "header header"
+        "sidebar main"
+        "footer footer";
+      height: 100vh;
+      gap: 0;
+    }
+
+    /* ── Header ────────────────────────────────────────── */
+    header {
+      grid-area: header;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      padding: 0 24px;
+      height: 56px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      position: relative;
+      overflow: hidden;
+    }
+    header::after {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 1px;
+      background: linear-gradient(to right, transparent, var(--accent), transparent);
+    }
+    .logo {
+      display: flex; align-items: center; gap: 10px;
+      font-family: 'Rajdhani', sans-serif;
+      font-weight: 700; font-size: 18px;
+      letter-spacing: 0.1em;
+      color: var(--accent);
+      text-shadow: var(--glow);
+    }
+    .logo-icon {
+      width: 28px; height: 28px;
+      border: 2px solid var(--accent);
+      border-radius: 4px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px;
+      box-shadow: var(--glow);
+    }
+    .logo-sub {
+      color: var(--text-dim);
+      font-size: 11px;
+      letter-spacing: 0.15em;
+      font-family: 'Share Tech Mono', monospace;
+      font-weight: 400;
+    }
+    .conn-bar {
+      display: flex; align-items: center; gap: 10px;
+      margin-left: auto;
+    }
+    .conn-bar input {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 13px;
+      padding: 5px 10px;
+      border-radius: 3px;
+      width: 140px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .conn-bar input:focus { border-color: var(--accent); }
+    .conn-bar input::placeholder { color: var(--text-dim); }
+    .port-input { width: 70px !important; }
+
+    .btn {
+      font-family: 'Rajdhani', sans-serif;
+      font-weight: 600;
+      font-size: 13px;
+      letter-spacing: 0.1em;
+      padding: 6px 16px;
+      border: 1px solid currentColor;
+      border-radius: 3px;
+      cursor: pointer;
+      background: transparent;
+      text-transform: uppercase;
+      transition: all 0.15s;
+    }
+    .btn-connect {
+      color: var(--accent2);
+      border-color: var(--accent2);
+    }
+    .btn-connect:hover { background: rgba(0,255,170,0.1); box-shadow: var(--glow2); }
+    .btn-connect.connected { color: var(--danger); border-color: var(--danger); }
+    .btn-connect.connected:hover { background: rgba(255,64,96,0.1); }
+    .btn-action {
+      color: var(--accent);
+      border-color: var(--accent);
+      font-size: 12px; padding: 5px 12px;
+    }
+    .btn-action:hover { background: rgba(0,200,255,0.1); box-shadow: var(--glow); }
+    .btn-danger {
+      color: var(--danger);
+      border-color: var(--danger);
+    }
+    .btn-danger:hover { background: rgba(255,64,96,0.1); }
+    .btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+    .status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--text-dim);
+      transition: all 0.3s;
+    }
+    .status-dot.online {
+      background: var(--accent2);
+      box-shadow: 0 0 8px var(--accent2);
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%,100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    /* ── Sidebar ───────────────────────────────────────── */
+    .sidebar {
+      grid-area: sidebar;
+      border-right: 1px solid var(--border);
+      background: var(--surface);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .panel-title {
+      font-family: 'Rajdhani', sans-serif;
+      font-weight: 700;
+      font-size: 11px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      padding: 12px 16px 8px;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 8px;
+    }
+    .panel-title::before {
+      content: '';
+      width: 3px; height: 12px;
+      background: var(--accent);
+      border-radius: 2px;
+    }
+    .file-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 0;
+    }
+    .file-list::-webkit-scrollbar { width: 4px; }
+    .file-list::-webkit-scrollbar-track { background: transparent; }
+    .file-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    .file-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 16px;
+      cursor: pointer;
+      transition: background 0.1s;
+      border-left: 2px solid transparent;
+    }
+    .file-item:hover { background: rgba(0,200,255,0.05); border-left-color: var(--accent); }
+    .file-item.selected { background: rgba(0,200,255,0.08); border-left-color: var(--accent); }
+    .file-icon { color: var(--accent); font-size: 16px; flex-shrink: 0; }
+    .file-name { flex: 1; color: var(--text-bright); font-size: 13px; word-break: break-all; }
+    .file-size { color: var(--text-dim); font-size: 11px; flex-shrink: 0; }
+    .file-actions { display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s; }
+    .file-item:hover .file-actions { opacity: 1; }
+    .icon-btn {
+      background: transparent; border: none; cursor: pointer;
+      color: var(--text-dim); font-size: 14px; padding: 2px 4px;
+      transition: color 0.15s;
+    }
+    .icon-btn:hover.get { color: var(--accent2); }
+    .icon-btn:hover.del { color: var(--danger); }
+
+    .empty-state {
+      text-align: center;
+      color: var(--text-dim);
+      padding: 40px 20px;
+      font-size: 12px;
+      line-height: 2;
+    }
+
+    .sidebar-actions {
+      padding: 12px;
+      border-top: 1px solid var(--border);
+      display: flex; gap: 8px;
+    }
+    .sidebar-actions .btn { flex: 1; font-size: 11px; padding: 6px; text-align: center; }
+
+    /* ── Main / Terminal ───────────────────────────────── */
+    main {
+      grid-area: main;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--bg);
+    }
+    .terminal {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 20px;
+      font-size: 13px;
+      line-height: 1.8;
+    }
+    .terminal::-webkit-scrollbar { width: 4px; }
+    .terminal::-webkit-scrollbar-track { background: transparent; }
+    .terminal::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    .log-line { display: flex; gap: 12px; }
+    .log-time { color: var(--text-dim); flex-shrink: 0; font-size: 11px; }
+    .log-msg { flex: 1; word-break: break-all; }
+    .log-msg.info    { color: var(--text); }
+    .log-msg.success { color: var(--accent2); }
+    .log-msg.error   { color: var(--danger); }
+    .log-msg.warn    { color: var(--warning); }
+    .log-msg.accent  { color: var(--accent); }
+    .log-msg.cmd     { color: var(--text-bright); }
+    .log-msg.dim     { color: var(--text-dim); }
+
+    .progress-container {
+      margin: 4px 0 4px 72px;
+      display: none;
+    }
+    .progress-container.active { display: block; }
+    .progress-bar-wrap {
+      height: 4px;
+      background: var(--border);
+      border-radius: 2px;
+      overflow: hidden;
+      width: 300px;
+      margin-bottom: 4px;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      background: linear-gradient(to right, var(--accent), var(--accent2));
+      border-radius: 2px;
+      width: 0%;
+      transition: width 0.1s;
+      box-shadow: 0 0 8px var(--accent);
+    }
+    .progress-label { font-size: 11px; color: var(--text-dim); }
+
+    /* ── Input Bar ─────────────────────────────────────── */
+    .input-row {
+      display: flex; align-items: center;
+      padding: 12px 20px;
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+      gap: 10px;
+      position: relative;
+    }
+    .input-row::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 1px;
+      background: linear-gradient(to right, transparent, var(--border), transparent);
+    }
+    .prompt { color: var(--accent); font-size: 14px; flex-shrink: 0; }
+    .cmd-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: var(--text-bright);
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 14px;
+      caret-color: var(--accent);
+    }
+    .cmd-input::placeholder { color: var(--text-dim); }
+
+    .upload-label {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      font-family: inherit;
+      font-size: 12px;
+      padding: 5px 10px;
+      border-radius: 3px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .upload-label:hover { border-color: var(--accent); color: var(--accent); }
+    #file-upload { display: none; }
+
+    /* ── Footer ────────────────────────────────────────── */
+    footer {
+      grid-area: footer;
+      display: flex; align-items: center; gap: 20px;
+      padding: 0 20px;
+      height: 28px;
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+    .stat { display: flex; align-items: center; gap: 6px; }
+    .stat-val { color: var(--accent); }
+
+    /* ── Animations ────────────────────────────────────── */
+    @keyframes fadeIn { from { opacity:0; transform: translateY(4px); } to { opacity:1; transform:none; } }
+    .log-line { animation: fadeIn 0.2s ease; }
+
+    /* ── Responsive ────────────────────────────────────── */
+    @media(max-width: 700px) {
+      .app { grid-template-columns: 1fr; grid-template-areas: "header" "main" "footer"; }
+      .sidebar { display: none; }
+    }
+  </style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Header -->
+  <header>
+    <div class="logo">
+      <div class="logo-icon">⇌</div>
+      FTP<span style="color:var(--text-dim)">.</span>CLIENT
+      <span class="logo-sub">// v1.0</span>
+    </div>
+    <div class="conn-bar">
+      <span class="status-dot" id="dot"></span>
+      <input id="inp-host" type="text" placeholder="Host / IP" value="127.0.0.1" />
+      <input id="inp-port" type="text" placeholder="Port" value="9000" class="port-input" />
+      <button class="btn btn-connect" id="btn-conn" onclick="toggleConnection()">Connect</button>
+    </div>
+  </header>
+
+  <!-- Sidebar: File List -->
+  <aside class="sidebar">
+    <div class="panel-title">Server Files</div>
+    <div class="file-list" id="file-list">
+      <div class="empty-state">
+        ◌ Not connected<br/>
+        <span style="font-size:11px">Connect to load files</span>
+      </div>
+    </div>
+    <div class="sidebar-actions">
+      <button class="btn btn-action" onclick="runCommand('LIST')" id="btn-refresh">↺ Refresh</button>
+      <label class="btn btn-action upload-label" for="file-upload">↑ Upload</label>
+      <input type="file" id="file-upload" multiple onchange="handleFileUpload(this)" />
+    </div>
+  </aside>
+
+  <!-- Main Terminal -->
+  <main>
+    <div class="terminal" id="terminal">
+      <div class="log-line">
+        <span class="log-time">──────</span>
+        <span class="log-msg dim">FTP Client Terminal — type HELP for commands</span>
+      </div>
+    </div>
+    <div class="progress-container" id="progress-box">
+      <div class="progress-bar-wrap"><div class="progress-bar-fill" id="prog-bar"></div></div>
+      <div class="progress-label" id="prog-label">Transferring...</div>
+    </div>
+    <div class="input-row">
+      <span class="prompt">ftp&gt;</span>
+      <input class="cmd-input" id="cmd-input" type="text"
+             placeholder="Type a command (HELP for list)..."
+             onkeydown="handleKey(event)" autocomplete="off" spellcheck="false" />
+      <label class="upload-label" for="file-upload">⊕ File</label>
+    </div>
+  </main>
+
+  <!-- Footer -->
+  <footer>
+    <div class="stat">Status: <span class="stat-val" id="stat-status">OFFLINE</span></div>
+    <div class="stat">Server: <span class="stat-val" id="stat-server">—</span></div>
+    <div class="stat">Files: <span class="stat-val" id="stat-files">0</span></div>
+    <div class="stat">Transferred: <span class="stat-val" id="stat-bytes">0 B</span></div>
+    <div style="margin-left:auto; color: var(--text-dim);">
+      Note: This UI simulates an FTP session. Wire up to a WebSocket proxy for live use.
+    </div>
+  </footer>
+</div>
+
+<script>
+// ─── State ─────────────────────────────────────────────────────────────────
+const state = {
+  connected: false,
+  host: '',
+  port: 9000,
+  files: [],
+  totalBytes: 0,
+  cmdHistory: [],
+  histIndex: -1,
+};
+
+// ─── Simulated Server State ─────────────────────────────────────────────────
+const mockServer = {
+  files: [
+    { name: 'readme.txt',     size: 1024,    content: 'Welcome to the FTP-Like server!\n\nThis is a simulated text file.\nYou can GET, PUT, LIST and DELETE files.' },
+    { name: 'data.csv',       size: 20480,   content: 'id,name,score\n1,Alice,95\n2,Bob,87\n3,Carol,92' },
+    { name: 'report.pdf',     size: 512000,  content: null },
+    { name: 'archive.zip',    size: 1048576, content: null },
+    { name: 'config.json',    size: 2048,    content: '{\n  "server": "localhost",\n  "port": 9000,\n  "buffer": 4096\n}' },
+  ]
+};
+
+// ─── Logging ────────────────────────────────────────────────────────────────
+function now() {
+  return new Date().toTimeString().split(' ')[0];
+}
+
+function log(msg, type = 'info') {
+  const term = document.getElementById('terminal');
+  const line = document.createElement('div');
+  line.className = 'log-line';
+  line.innerHTML = `<span class="log-time">${now()}</span><span class="log-msg ${type}">${msg}</span>`;
+  term.appendChild(line);
+  term.scrollTop = term.scrollHeight;
+}
+
+// ─── Progress Bar ───────────────────────────────────────────────────────────
+function showProgress(label) {
+  document.getElementById('progress-box').classList.add('active');
+  document.getElementById('prog-bar').style.width = '0%';
+  document.getElementById('prog-label').textContent = label;
+}
+function updateProgress(pct, label) {
+  document.getElementById('prog-bar').style.width = pct + '%';
+  document.getElementById('prog-label').textContent = label;
+}
+function hideProgress() {
+  document.getElementById('progress-box').classList.remove('active');
+}
+
+// ─── Simulate Transfer ──────────────────────────────────────────────────────
+function simulateTransfer(label, size, onDone) {
+  showProgress(label);
+  let done = 0;
+  const step = size / 20;
+  const iv = setInterval(() => {
+    done = Math.min(done + step, size);
+    const pct = Math.round((done / size) * 100);
+    updateProgress(pct, `${label} — ${formatBytes(done)} / ${formatBytes(size)}`);
+    if (done >= size) {
+      clearInterval(iv);
+      setTimeout(() => { hideProgress(); onDone(); }, 200);
+    }
+  }, 60);
+}
+
+function formatBytes(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+  return (b/1048576).toFixed(2) + ' MB';
+}
+
+function updateStats() {
+  document.getElementById('stat-files').textContent = mockServer.files.length;
+  document.getElementById('stat-bytes').textContent = formatBytes(state.totalBytes);
+  document.getElementById('stat-server').textContent =
+    state.connected ? `${state.host}:${state.port}` : '—';
+}
+
+// ─── File List Render ───────────────────────────────────────────────────────
+function renderFileList() {
+  const el = document.getElementById('file-list');
+  if (!state.connected || mockServer.files.length === 0) {
+    el.innerHTML = `<div class="empty-state">◌ ${state.connected ? 'No files on server' : 'Not connected'}</div>`;
+    return;
+  }
+  el.innerHTML = mockServer.files.map(f => `
+    <div class="file-item" onclick="selectFile('${f.name}')">
+      <span class="file-icon">${fileIcon(f.name)}</span>
+      <span class="file-name">${f.name}</span>
+      <span class="file-size">${formatBytes(f.size)}</span>
+      <span class="file-actions">
+        <button class="icon-btn get" title="Download" onclick="event.stopPropagation();runCommand('GET ${f.name}')">↓</button>
+        <button class="icon-btn del" title="Delete" onclick="event.stopPropagation();runCommand('DELETE ${f.name}')">✕</button>
+      </span>
+    </div>`).join('');
+}
+
+function fileIcon(name) {
+  const ext = name.split('.').pop().toLowerCase();
+  const map = { txt:'📄', csv:'📊', pdf:'📕', zip:'🗜️', json:'📋', png:'🖼️', jpg:'🖼️', mp4:'🎬', py:'🐍' };
+  return map[ext] || '📄';
+}
+
+function selectFile(name) {
+  document.querySelectorAll('.file-item').forEach(e => e.classList.remove('selected'));
+  event.currentTarget.classList.add('selected');
+}
+
+// ─── Connection ─────────────────────────────────────────────────────────────
+function toggleConnection() {
+  if (state.connected) disconnect();
+  else connect();
+}
+
+function connect() {
+  state.host = document.getElementById('inp-host').value.trim() || '127.0.0.1';
+  state.port = parseInt(document.getElementById('inp-port').value) || 9000;
+
+  log(`Connecting to ${state.host}:${state.port}...`, 'dim');
+
+  setTimeout(() => {
+    state.connected = true;
+    document.getElementById('dot').classList.add('online');
+    document.getElementById('btn-conn').textContent = 'Disconnect';
+    document.getElementById('btn-conn').classList.add('connected');
+    document.getElementById('stat-status').textContent = 'ONLINE';
+    document.getElementById('stat-status').style.color = 'var(--accent2)';
+
+    log(`220 FTP-Like Server Ready — ${state.host}:${state.port}`, 'success');
+    log('Connection established. Type HELP for available commands.', 'dim');
+    renderFileList();
+    updateStats();
+  }, 600);
+}
+
+function disconnect() {
+  log('> QUIT', 'cmd');
+  log('221 Goodbye. Connection closed.', 'warn');
+  state.connected = false;
+  document.getElementById('dot').classList.remove('online');
+  document.getElementById('btn-conn').textContent = 'Connect';
+  document.getElementById('btn-conn').classList.remove('connected');
+  document.getElementById('stat-status').textContent = 'OFFLINE';
+  document.getElementById('stat-status').style.color = '';
+  renderFileList();
+  updateStats();
+}
+
+// ─── Command Engine ─────────────────────────────────────────────────────────
+function runCommand(raw) {
+  if (!raw.trim()) return;
+  const parts = raw.trim().split(/\s+/);
+  const cmd = parts[0].toUpperCase();
+
+  if (cmd !== 'HELP' && cmd !== 'CLEAR') {
+    log(`&gt; ${raw}`, 'cmd');
+    state.cmdHistory.unshift(raw);
+    state.histIndex = -1;
+  }
+
+  if (cmd === 'HELP') { showHelp(); return; }
+  if (cmd === 'CLEAR') { document.getElementById('terminal').innerHTML = ''; return; }
+
+  if (!state.connected && cmd !== 'CONNECT') {
+    log('✗ Not connected. Use the Connect button or type CONNECT.', 'error');
+    return;
+  }
+
+  switch (cmd) {
+    case 'LIST':   cmdList(); break;
+    case 'GET':    parts[1] ? cmdGet(parts[1]) : log('Usage: GET <filename>', 'warn'); break;
+    case 'PUT':    parts[1] ? cmdPut(parts[1]) : log('Usage: PUT <filename>', 'warn'); break;
+    case 'DELETE': parts[1] ? cmdDelete(parts[1]) : log('Usage: DELETE <filename>', 'warn'); break;
+    case 'CONNECT': connect(); break;
+    case 'QUIT':   disconnect(); break;
+    default: log(`400 UNKNOWN_COMMAND: '${cmd}'. Type HELP for commands.`, 'error');
+  }
+}
+
+// ─── Commands ───────────────────────────────────────────────────────────────
+function cmdList() {
+  setTimeout(() => {
+    if (mockServer.files.length === 0) {
+      log('200 OK — Directory is empty.', 'success');
+      return;
+    }
+    log(`200 OK — ${mockServer.files.length} file(s) found:`, 'success');
+    mockServer.files.forEach(f => {
+      log(`  ${f.name.padEnd(28)} ${formatBytes(f.size).padStart(10)}`, 'accent');
+    });
+    renderFileList();
+    updateStats();
+  }, 150);
+}
+
+function cmdGet(filename) {
+  const file = mockServer.files.find(f => f.name === filename);
+  if (!file) { log(`404 FILE_NOT_FOUND: '${filename}'`, 'error'); return; }
+
+  log(`200 OK — Starting download: ${filename} (${formatBytes(file.size)})`, 'success');
+  simulateTransfer(`Downloading ${filename}`, file.size, () => {
+    state.totalBytes += file.size;
+    log(`✓ Download complete: ${filename} — ${formatBytes(file.size)} saved to /downloads/`, 'success');
+
+    // If it's a text file, show a preview
+    if (file.content) {
+      log('── File Preview ──────────────────────────', 'dim');
+      file.content.split('\n').slice(0, 5).forEach(l => log('  ' + l, 'dim'));
+      if (file.content.split('\n').length > 5) log('  ... (truncated)', 'dim');
+    }
+    updateStats();
+  });
+}
+
+function cmdPut(filename) {
+  const size = Math.floor(Math.random() * 50000) + 1000;
+  log(`200 READY — Server accepted: ${filename} (${formatBytes(size)})`, 'success');
+  simulateTransfer(`Uploading ${filename}`, size, () => {
+    const existing = mockServer.files.findIndex(f => f.name === filename);
+    if (existing >= 0) mockServer.files[existing].size = size;
+    else mockServer.files.push({ name: filename, size, content: null });
+    state.totalBytes += size;
+    log(`✓ Upload complete: ${filename} — ${formatBytes(size)} stored on server.`, 'success');
+    renderFileList();
+    updateStats();
+  });
+}
+
+function cmdDelete(filename) {
+  const idx = mockServer.files.findIndex(f => f.name === filename);
+  if (idx < 0) { log(`404 FILE_NOT_FOUND: '${filename}'`, 'error'); return; }
+  setTimeout(() => {
+    mockServer.files.splice(idx, 1);
+    log(`200 OK — '${filename}' deleted from server.`, 'success');
+    renderFileList();
+    updateStats();
+  }, 200);
+}
+
+function handleFileUpload(input) {
+  if (!state.connected) { log('✗ Not connected.', 'error'); return; }
+  Array.from(input.files).forEach(file => {
+    log(`> PUT ${file.name}`, 'cmd');
+    cmdPutReal(file.name, file.size);
+  });
+  input.value = '';
+}
+
+function cmdPutReal(name, size) {
+  log(`200 READY — Uploading ${name} (${formatBytes(size)})`, 'success');
+  simulateTransfer(`Uploading ${name}`, size, () => {
+    const existing = mockServer.files.findIndex(f => f.name === name);
+    if (existing >= 0) mockServer.files[existing].size = size;
+    else mockServer.files.push({ name, size, content: null });
+    state.totalBytes += size;
+    log(`✓ Upload complete: ${name}`, 'success');
+    renderFileList();
+    updateStats();
+  });
+}
+
+function showHelp() {
+  const lines = [
+    ['LIST',             'List all files available on the server'],
+    ['GET &lt;filename&gt;',  'Download a file from the server'],
+    ['PUT &lt;filename&gt;',  'Simulate uploading a file'],
+    ['DELETE &lt;filename&gt;','Delete a file from the server'],
+    ['CONNECT',         'Connect to the server'],
+    ['QUIT',            'Disconnect from the server'],
+    ['CLEAR',           'Clear the terminal'],
+    ['HELP',            'Show this help message'],
+  ];
+  log('── Available Commands ─────────────────────', 'dim');
+  lines.forEach(([cmd, desc]) =>
+    log(`  <span style="color:var(--accent)">${cmd.padEnd(22)}</span>${desc}`, 'info'));
+  log('───────────────────────────────────────────', 'dim');
+}
+
+// ─── Input Handling ─────────────────────────────────────────────────────────
+function handleKey(e) {
+  const inp = document.getElementById('cmd-input');
+  if (e.key === 'Enter') {
+    const val = inp.value.trim();
+    if (val) { runCommand(val); inp.value = ''; }
+  } else if (e.key === 'ArrowUp') {
+    state.histIndex = Math.min(state.histIndex + 1, state.cmdHistory.length - 1);
+    inp.value = state.cmdHistory[state.histIndex] || '';
+    e.preventDefault();
+  } else if (e.key === 'ArrowDown') {
+    state.histIndex = Math.max(state.histIndex - 1, -1);
+    inp.value = state.histIndex >= 0 ? state.cmdHistory[state.histIndex] : '';
+    e.preventDefault();
+  }
+}
+
+// ─── Init ────────────────────────────────────────────────────────────────────
+document.getElementById('cmd-input').focus();
+updateStats();
+</script>
+</body>
+</html>
